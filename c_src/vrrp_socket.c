@@ -28,28 +28,31 @@ static ERL_NIF_TERM atom_ok, atom_missing, atom_error;
 /* } */
 
 static ERL_NIF_TERM
-create_socket(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+make_error(ErlNifEnv *env, char *string)
+{
+  return enif_make_tuple2(env,
+                          atom_error,
+                          enif_make_string(env, string, ERL_NIF_LATIN1));
+}
+
+
+static ERL_NIF_TERM
+create_socket_ipv4(ErlNifEnv *env, char *if_name)
 {
   int rsock = -1, wsock = -1;
   int ifindex, on = 1, off = 1;
   struct ifreq ifr;
   struct ip_mreqn imr;
-  char if_name[IFNAMSIZ];
-
-  if (argc != 2) return atom_error;
-
-  enif_get_string(env, argv[1], if_name, IFNAMSIZ, ERL_NIF_LATIN1);
 
   // Allocate a raw socket - requires root...
   rsock = socket(AF_INET, SOCK_RAW, VRRP_PROTO);
-  if (rsock < 0) return atom_error;
+  if (rsock < 0) return make_error(env, "Failed to create raw socket");
 
-  // printf("rsock: %d\nif_name: %s\n", rsock, if_name);
   // Map name to ifindex
   memset(&ifr, 0, sizeof(ifr));
   strncpy(ifr.ifr_name, if_name, sizeof(ifr.ifr_name));
   if (ioctl(rsock, SIOCGIFINDEX, &ifr) == -1) {
-    return atom_missing;
+    return make_error(env, "Failed to map interface name to ifindex");
   }
   ifindex = ifr.ifr_ifindex;
 
@@ -57,25 +60,74 @@ create_socket(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
   memset(&imr, 0, sizeof(imr));
   imr.imr_multiaddr.s_addr = htonl(VRRP_GROUP);
   imr.imr_ifindex = ifindex;
-  setsockopt(rsock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-             (char *) &imr, (socklen_t)sizeof(struct ip_mreqn));
+  if (setsockopt(rsock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+                 (char *) &imr, (socklen_t)sizeof(struct ip_mreqn)) != 0) {
+    close(rsock);
+    return make_error(env, "Failed to add VRRP group membership");
+  }
 
   // Now bind to device...
-  setsockopt(rsock, SOL_SOCKET, SO_BINDTODEVICE,
-             if_name, IFNAMSIZ);
+  if (setsockopt(rsock, SOL_SOCKET, SO_BINDTODEVICE,
+                 if_name, IFNAMSIZ) != 0) {
+    close(rsock);
+    return make_error(env, "Failed to bind to interface");
+  }
 
   wsock = socket(AF_INET, SOCK_RAW, VRRP_PROTO);
+  if (wsock < 0) {
+    close(rsock);
+    return make_error(env, "Failed to create write socket");
+  }
+
+  if (setsockopt(wsock, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof(off)) != 0) {
+    close(rsock);
+    close(wsock);
+    return make_error(env, "Failed to turn off all multicast");
+  }
+
+  if (setsockopt(wsock, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on)) != 0) {
+    close(rsock);
+    close(wsock);
+    return make_error(env, "Failed to turn HDRINCL on");
+  }
+
+  if (setsockopt(wsock, SOL_SOCKET, SO_BINDTODEVICE, if_name, IFNAMSIZ) != 0) {
+    close(wsock);
+    close(rsock);
+    return make_error(env, "Failed to bind write socket to device");
+  }
   
-  setsockopt(wsock, IPPROTO_IP, IP_MULTICAST_ALL, &off, sizeof(off));
-  setsockopt(wsock, IPPROTO_IP, IP_HDRINCL, &on, sizeof(on));
-  setsockopt(wsock, SOL_SOCKET, SO_BINDTODEVICE, if_name, IFNAMSIZ);
   memset(&imr, 0, sizeof(imr));
   imr.imr_ifindex = ifindex;
-  setsockopt(wsock, IPPROTO_IP, IP_MULTICAST_IF, &imr, sizeof(imr));
+  if (setsockopt(wsock, IPPROTO_IP, IP_MULTICAST_IF, &imr, sizeof(imr)) != 0) {
+    close(rsock);
+    close(wsock);
+    return make_error(env, "Failed to turn on multicast for write socket");
+  }
   
   return enif_make_tuple2(env,
                           enif_make_int(env, rsock),
                           enif_make_int(env, wsock));
+}
+
+static ERL_NIF_TERM
+create_socket(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+  char family[10];
+  char if_name[IFNAMSIZ];
+
+  if (argc != 2) return atom_error;
+
+  if (enif_get_atom(env, argv[0], family, sizeof(family), ERL_NIF_LATIN1) == 0
+      || enif_get_string(env, argv[1], if_name, IFNAMSIZ, ERL_NIF_LATIN1) == 0) {
+    return error("argument error");
+  }
+
+  if (strcmp(family, "ipv4") == 0) {
+    return create_socket_ipv4(env, if_name);
+  } else if (strcmp(family, "ipv6") == 0) {
+    return make_error(env, "IPv6 not yet supported");
+  }
 }
 
 static int
