@@ -354,6 +354,7 @@ process_message('MASTER', #vrrp_packet{priority = AP, interval = AI},
     when AP > LP ->
     %% BUG - need to handle case 735!
     stop_timer(State#state.adver_timer),
+    io:format("Becoming BACKUP for ~p~n", [State#state.id]),
     {next_state, 'BACKUP',
      become_backup(State#state{
                      adver_timer = undef,
@@ -391,13 +392,13 @@ send_advert(State) ->
 
 start_timer(master_down_timer, State) ->
     stop_timer(State#state.master_down_timer),
-    Timeout = State#state.master_down_interval * 10,
+    Timeout = erlang:trunc(State#state.master_down_interval * 10),
     Timer = erlang:start_timer(Timeout, self(), {master_down_timer}),
     State#state{master_down_timer = Timer};
 start_timer(adver_timer, State) ->
     stop_timer(State#state.adver_timer),
     %% Interval is in centiseconds and we want it in miliseconds...
-    Timeout = State#state.interval * 10,
+    Timeout = erlang:trunc(State#state.interval * 10),
     Timer = erlang:start_timer(Timeout, self(), {adver_timer}),
     State#state{adver_timer = Timer}.
 
