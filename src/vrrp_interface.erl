@@ -116,7 +116,7 @@ init(Args) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({add_mapping, Id, FSMPid}, _From,
-           #state{mapping = D} = State) ->
+           #state{mapping = D, v4_addr = IP} = State) ->
     case dict:find(Id, D) of
         {ok, {_P, MR}} ->
             erlang:demonitor(MR);
@@ -124,7 +124,7 @@ handle_call({add_mapping, Id, FSMPid}, _From,
             ok
     end,
     Ref = erlang:monitor(process, FSMPid),
-    {reply, ok, State#state{mapping = dict:store(Id, {FSMPid, Ref}, D)}};
+    {reply, IP, State#state{mapping = dict:store(Id, {FSMPid, Ref}, D)}};
 handle_call({remove_mapping, Id}, _From,
            #state{mapping = D} = State) ->
     ND =
@@ -254,8 +254,11 @@ verify_vrrp(Source,
     %% Map IPs into something useful...
     IPs = [ {A, B, C, D} || <<A:8, B:8, C:8, D:8>> <= BinIPs ],
 
+    %% Map Source into an integer (used for comparism)
+    <<SourceInt:32>> = list_to_binary(tuple_to_list(Source)),
+
     {#vrrp_packet{
-        from = Source,
+        from = SourceInt,
         version = 3,
         type = announce,
         id = ID,

@@ -29,7 +29,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-          our_ip,        %% Configured IP address
+          our_ip,        %% Configured IP address, as an integer
           family :: ipv4 | ipv6,
           supervisor,    %% Supervisor reference
           interface,     %% Interface on which we are running
@@ -274,10 +274,11 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Sanity check the incoming message...
 %%% ===================================================================
-handle_message(StateName, #vrrp_packet{id = I} = M, #state{id = I} = State) ->
+handle_message(StateName, #vrrp_packet{from = AIP, id = I} = M, #state{our_ip = LIP, id = I} = State)
+  when AIP =/= LIP ->
     process_message(StateName, M, State);
 handle_message(StateName, _M, S) ->
-    %% VRRP ID does not match, so we ignore (and should not have received!)
+    %% VRRP ID does not match or the packet was from us, so we ignore
     {next_state, StateName, S}.
 
 
@@ -349,10 +350,9 @@ process_message('MASTER', #vrrp_packet{priority = 0}, #state{} = State) ->
     %% 710
     send_advert(State),
     {next_state, 'MASTER', start_timer(adver_timer, State)};
-process_message('MASTER', #vrrp_packet{priority = AP, interval = AI},
-                #state{priority = LP} = State)
-    when AP > LP ->
-    %% BUG - need to handle case 735!
+process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP},
+                #state{priority = LP, our_ip = LIP} = State)
+    when AP > LP orelse (AP == LP andalso AIP > LIP) ->
     stop_timer(State#state.adver_timer),
     io:format("Becoming BACKUP for ~p~n", [State#state.id]),
     {next_state, 'BACKUP',
@@ -360,14 +360,18 @@ process_message('MASTER', #vrrp_packet{priority = AP, interval = AI},
                      adver_timer = undef,
                      master_adver_interval = AI,
                      master_down_interval = master_down_time(AI, AP)})};
-process_message('MASTER', #vrrp_packet{}, #state{} = State) ->
+process_message('MASTER', #vrrp_packet{priority = AP, from = AIP}, #state{priority = LP, our_ip = LIP} = State) ->
+    io:format("AIP: ~p LIP: ~p~nAP: ~p LP ~p~n",
+              [AIP, LIP, AP, LP]),
     %% Nothing to do...
     {next_state, 'MASTER', State}.
 
 register_interface(#state{interface = I, id = V} = State) ->
-    {ok, InterfacePid} = vrrp_interface_manager:set(I, V, self()),
+    {ok, InterfacePid, IP} = vrrp_interface_manager:set(I, V, self()),
+    <<IPInt:32>> = list_to_binary(tuple_to_list(IP)),
     erlang:link(InterfacePid),
-    State#state{interface_pid = InterfacePid}.
+    io:format("Our IP: ~p~n", [IPInt]),
+    State#state{interface_pid = InterfacePid, our_ip = IPInt}.
 
 become_master(#state{family = ipv4} = State) ->
     io:format("Becoming Master for ID ~p~n", [State#state.id]),

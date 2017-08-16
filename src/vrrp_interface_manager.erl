@@ -81,15 +81,15 @@ init([]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({set_mapping, Interface, Id, FSMPid}, _From, #state{mapping = D} = State) ->
-    {InterfacePid, NewState} =
+    {InterfacePid, InterfaceIP, NewState} =
         case dict:find(Interface, D) of
             error ->
                 start_new_interface(Interface, Id, FSMPid, State);
             {ok, {P, _MR}} ->
-                vrrp_interface:add_mapping(P, Id, FSMPid),
-                {p, State}
+                IIP = vrrp_interface:add_mapping(P, Id, FSMPid),
+                {p, IIP, State}
         end,
-    {reply, {ok, InterfacePid}, NewState};
+    {reply, {ok, InterfacePid, InterfaceIP}, NewState};
 handle_call({remove_mapping, Interface, Id}, _From, #state{mapping = D} = State) ->
     NewState =
         case dict:find(Interface, D) of
@@ -163,7 +163,7 @@ code_change(_OldVsn, State, _Extra) ->
 start_new_interface(Interface, Id, Pid, #state{mapping = D} = State) ->
     {ok, NewPid} = vrrp_interface:start_link([{interface, Interface}]),
     MonitorRef = erlang:monitor(process, NewPid),
-    vrrp_interface:add_mapping(NewPid, Id, Pid),
-    {NewPid, State#state{mapping = dict:store(Interface, {NewPid, MonitorRef}, D)}}.
+    IIP = vrrp_interface:add_mapping(NewPid, Id, Pid),
+    {NewPid, IIP, State#state{mapping = dict:store(Interface, {NewPid, MonitorRef}, D)}}.
     
     
