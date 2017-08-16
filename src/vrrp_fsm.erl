@@ -387,6 +387,13 @@ become_backup(#state{family = ipv4} = State) ->
 
 send_advert(State) ->
     %% Send Advert
+    vrrp_interface:send_message(State#state.interface_pid,
+                                #vrrp_packet{
+                                   id = State#state.id,
+                                   priority = State#state.priority,
+                                   interval = State#state.interval,
+                                   ips = State#state.vip
+                                  }),
     %% Start timer..
     start_timer(adver_timer, State).
 
