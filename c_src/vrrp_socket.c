@@ -9,10 +9,12 @@
  */
 #include <string.h>
 #include <sys/cdefs.h>
+#include <stdint.h>
+#include <unistd.h>
 
 #include <sys/ioctl.h>
-#include <linux/in.h>
 #include <net/if.h>
+#include <arpa/inet.h>
 
 #include "erl_nif.h"
 
@@ -43,6 +45,7 @@ create_socket_ipv4(ErlNifEnv *env, char *if_name)
   int ifindex, on = 1, off = 1;
   struct ifreq ifr;
   struct ip_mreqn imr;
+  uint32_t addr;
 
   // Allocate a raw socket - requires root...
   rsock = socket(AF_INET, SOCK_RAW, VRRP_PROTO);
@@ -55,6 +58,12 @@ create_socket_ipv4(ErlNifEnv *env, char *if_name)
     return make_error(env, "Failed to map interface name to ifindex");
   }
   ifindex = ifr.ifr_ifindex;
+
+  // Get our address...
+  if (ioctl(rsock, SIOCGIFADDR, (caddr_t) &ifr, NULL) == -1) {
+    return make_error(env, "Failed to get our local address");
+  }
+  addr = ntohl(((struct sockaddr_in *) &(ifr.ifr_addr))->sin_addr.s_addr);
 
   // Add group membership
   memset(&imr, 0, sizeof(imr));
@@ -104,8 +113,13 @@ create_socket_ipv4(ErlNifEnv *env, char *if_name)
     close(wsock);
     return make_error(env, "Failed to turn on multicast for write socket");
   }
-  
-  return enif_make_tuple2(env,
+
+  return enif_make_tuple3(env,
+                          enif_make_tuple4(env,
+                                           enif_make_int(env, (addr >> 24) & 255),
+                                           enif_make_int(env, (addr >> 16) & 255),
+                                           enif_make_int(env, (addr >> 8) & 255),
+                                           enif_make_int(env, addr & 255)),
                           enif_make_int(env, rsock),
                           enif_make_int(env, wsock));
 }
