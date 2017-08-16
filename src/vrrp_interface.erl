@@ -12,10 +12,14 @@
 
 -include("vrrp_protocol.hrl").
 
+-define(V4_HEADER, 20).
+-define(INT16MAX, 65535).
+
 %% API
 -export([start_link/1]).
 
--export([add_mapping/3, remove_mapping/2]).
+-export([add_mapping/3, remove_mapping/2,
+         send_message/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -25,8 +29,9 @@
 
 -record(state, {
           interface,   %% Physical interface we are running on
+          v4_addr,
           v4_rsocket,
-          wsocket,
+          v4_wsocket,
           mapping      %% Dict of Id -> FSM Pid
          }).
 
@@ -53,6 +58,10 @@ add_mapping(Interface, Id, FSMPid) ->
 remove_mapping(Interface, Id) ->
     gen_server:call(Interface, {remove_mapping, Id}).
 
+send_message(Interface, Message) ->
+    gen_server:call(Interface, {send, Message}).
+
+
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -71,16 +80,25 @@ init(Args) ->
     %% This is a bit ugly! We use a NIF to create the sockets and then
     %% we trick gen_udp into giving us the data, including the source
     %% address (i.e. recvfrom()).
-    {R, _W} = vrrp_socket:create_socket(ipv4, Interface),
-    {ok, Socket} = gen_udp:open(0, [{fd, R}, binary]),
-    ok = gen_udp:controlling_process(Socket, self()),
+    {Addr, R, W} = vrrp_socket:create_socket(ipv4, Interface),
+    {ok, RSocket} = gen_udp:open(0, [{fd, R}, binary]),
+    ok = gen_udp:controlling_process(RSocket, self()),
 
-    %%% Rinse and repeat for the v6 and writer sockets...
+    %% Not sure we need to do this bit? We need the fd, but do we need the gen_udp palava?
+    {ok, WSocket} = gen_udp:open(0, [{fd, W}, binary]),
+    ok = gen_udp:controlling_process(WSocket, self()),
+
+    %%%
+    io:format("Local interface address: ~p~n", [Addr]),
+
+    %%% Rinse and repeat for the v6 and writer sockets when supported...
 
     %% Done
     {ok, #state{
             interface = Interface,
-            v4_rsocket = Socket,
+            v4_addr = Addr,
+            v4_rsocket = RSocket,
+            v4_wsocket = WSocket,
             mapping = dict:new()}}.
 
 %%--------------------------------------------------------------------
@@ -124,7 +142,10 @@ handle_call({remove_mapping, Id}, _From,
     %%     _ ->
     %%         {reply, ok, State#state{mapping = ND}}
     %% end.
-    {reply, ok, State#state{mapping = ND}}.
+    {reply, ok, State#state{mapping = ND}};
+handle_call({send, V}, _From, State) ->
+    {Reply, NewState} = send(V, State),
+    {reply, Reply, NewState}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -255,3 +276,67 @@ handle_packet({#vrrp_packet{id = Id} = Pkt, #state{mapping = D} = State}) ->
     State;
 handle_packet({bad_packet, State}) ->
     State.
+
+send(#vrrp_packet{} = M, State) ->
+    VrrpLen = ?VRRP_LEN + (length(M#vrrp_packet.ips) * 4),
+    Len = ?V4_HEADER + VrrpLen,
+
+    %% Convert IPs into a binary string...
+    IPCount = length(M#vrrp_packet.ips),
+    IPs = << <<A:8, B:8, C:8, D:8>> || {A, B, C, D} <- M#vrrp_packet.ips >>,
+
+    SrcAddr = list_to_binary(tuple_to_list(State#state.v4_addr)),
+
+    PseudoHeader =
+        <<SrcAddr/binary,
+          ?VRRP_V4_MCAST_BIN/binary,
+          0:8,
+          ?VRRP_PROTOCOL:8,
+          VrrpLen:16/big-integer>>,
+
+    IPHdr =
+        <<4:4, 5:4,
+          192:8,    %% TOS - 'Internet Control'
+          Len:16/big-integer,
+          0:32,     %% Fragment ID and offset
+          ?VRRP_TTL:8,
+          ?VRRP_PROTOCOL:8,
+          0:16,
+          SrcAddr/binary,
+          ?VRRP_V4_MCAST_BIN/binary>>,
+
+    Vrrp =
+        <<3:4,      %% VRRP Version
+          1:4,      %% Announcement (only type we know)
+          (M#vrrp_packet.id):8/integer,
+          (M#vrrp_packet.priority):8/integer,
+          IPCount:8/integer,
+          0:4,
+          (M#vrrp_packet.interval):12/big-integer>>,
+
+    CSum = checksum_1([PseudoHeader, Vrrp, IPs]),
+    R = gen_udp:send(State#state.v4_wsocket, ?VRRP_V4_MCAST, 0, [IPHdr, Vrrp, <<CSum:16/big-integer>>, IPs]),
+    {R, State}.
+
+checksum_1(BinList) when is_list(BinList) ->
+    checksum_1(BinList, 0);
+checksum_1(Bin) ->
+    (bnot checksum_2(Bin, 0)) band ?INT16MAX.
+
+checksum_1([], Csum) ->
+    (bnot Csum) band ?INT16MAX;
+checksum_1([Bin|T], Csum) ->
+    checksum_1(T, checksum_2(Bin, Csum)).
+
+checksum_2(Bin = <<N1:16/integer, N2:16/integer, N3:16/integer,
+		  N4:16/integer, Rem/binary>>, Csum) when size(Bin) >= 8 ->
+    checksum_2(Rem, Csum+N1+N2+N3+N4);
+checksum_2(<<Num:16/integer, Remainder/binary>>, Csum) ->
+    checksum_2(Remainder, Csum + Num);
+checksum_2(<<Num:8/integer>>, Csum) ->
+    checksum_2(<<>>, Csum+(Num bsl 8));
+checksum_2(<<>>, Csum) when Csum > ?INT16MAX ->
+    Carry = Csum bsr 16,
+    checksum_2(<<>>, (Csum band ?INT16MAX) + Carry);
+checksum_2(<<>>, Csum) ->
+    Csum.
