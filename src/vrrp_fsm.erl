@@ -16,7 +16,7 @@
 -export([start_link/1]).
 
 %% Public API
--export([stop/1, vrrp_msg/2]).
+-export([stop/1, vrrp_msg/2, ip_to_int/1]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3, handle_sync_event/4,
@@ -309,17 +309,19 @@ process_message('BACKUP', #vrrp_packet{priority = 0, interval = I},
                 #state{priority = P} = State) ->
     %% 430 - 0 priority, so we set our MDT to Skew Time
     {next_state, 'BACKUP',
-     start_timer(master_down_timer,
-                 State#state{master_down_interval = skew_time(P, I)})};
+     start_timer(master_down_timer,                                  %% 430
+                 State#state{master_down_interval = skew_time(P, I)} %% 430
+                )};
 process_message('BACKUP', #vrrp_packet{priority = AP, interval = AI},
                 #state{preempt_mode = SPM, priority = LP} = State)
     when SPM =:= false; AP >= LP ->
     %% 445 Prempt is false, or Advert is greater then or equal local priority
     {next_state, 'BACKUP',
-     start_timer(master_down_timer,
+     start_timer(master_down_timer,                                  %% 460
                  State#state{
-                   master_adver_interval = AI,
-                   master_down_interval = master_down_time(AI, LP)})};
+                   master_adver_interval = AI,                       %% 450
+                   master_down_interval = master_down_time(AI, LP)   %% 455
+                  })};
 process_message('BACKUP', #vrrp_packet{}, #state{} = State) ->
     %% 465 - discard...
     {next_state, 'BACKUP', State};
@@ -347,30 +349,26 @@ process_message('BACKUP', #vrrp_packet{}, #state{} = State) ->
    %%    (780) *endif // new Master detected
    %% (785) +endif // was priority zero?
 process_message('MASTER', #vrrp_packet{priority = 0}, #state{} = State) ->
-    %% 710
-    send_advert(State),
-    {next_state, 'MASTER', start_timer(adver_timer, State)};
+    send_advert(State),                                              %% 710
+    {next_state, 'MASTER', start_timer(adver_timer, State)};         %% 715
 process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP},
                 #state{priority = LP, our_ip = LIP} = State)
-    when AP > LP orelse (AP == LP andalso AIP > LIP) ->
-    stop_timer(State#state.adver_timer),
+    when AP > LP orelse (AP == LP andalso AIP > LIP) ->              %% 725, 730
+    stop_timer(State#state.adver_timer),                             %% 740
     io:format("Becoming BACKUP for ~p~n", [State#state.id]),
     {next_state, 'BACKUP',
-     become_backup(State#state{
+     become_backup(State#state{                                      %% 765
                      adver_timer = undef,
-                     master_adver_interval = AI,
-                     master_down_interval = master_down_time(AI, AP)})};
-process_message('MASTER', #vrrp_packet{priority = AP, from = AIP}, #state{priority = LP, our_ip = LIP} = State) ->
-    io:format("AIP: ~p LIP: ~p~nAP: ~p LP ~p~n",
-              [AIP, LIP, AP, LP]),
-    %% Nothing to do...
-    {next_state, 'MASTER', State}.
+                     master_adver_interval = AI,                     %% 745
+                     master_down_interval = master_down_time(AI, AP) %% 750, 755
+                    })};
+process_message('MASTER', #vrrp_packet{}, #state{} = State) ->
+    {next_state, 'MASTER', State}.                                   %% 775
 
 register_interface(#state{interface = I, id = V} = State) ->
     {ok, InterfacePid, IP} = vrrp_interface_manager:set(I, V, self()),
-    <<IPInt:32>> = list_to_binary(tuple_to_list(IP)),
+    IPInt = ip_to_int(IP),
     erlang:link(InterfacePid),
-    io:format("Our IP: ~p~n", [IPInt]),
     State#state{interface_pid = InterfacePid, our_ip = IPInt}.
 
 become_master(#state{family = ipv4} = State) ->
@@ -442,3 +440,10 @@ set_family(IPs) ->
         _ ->
             {error, mixed}
     end.
+
+ip_to_int({A, B, C, D}) ->
+    <<R:32>> = <<A:8, B:8, C:8, D:8>>,
+    R;
+ip_to_int({A, B, C, D, E, F, G, H}) ->
+    <<R:128>> = <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>,
+    R.

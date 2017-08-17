@@ -217,7 +217,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 verify_packet(Source,
               <<4:4/integer, 5:4/integer, _:8, Len:16/big-integer,
-                _:16, _:2, _:1, 0:13, 255:8, 112:8/integer,
+                _:16, _:2, _:1, 0:13, 255:8, ?VRRP_PROTOCOL:8/integer,
                 _:16, Src_Ip:32/big-integer, Dst_Ip:32/big-integer,
                 Remainder/binary>> = Pkt,
               State)
@@ -238,7 +238,20 @@ verify_packet(Source,
     %%  Src_Ip:32/big-integer, % Source Ip
     %%  Dst_Ip:32/big-integer, % Should check this against our Ip
     %%  Remainder/binary>> = Packet, % We don't do options yet 
-    verify_vrrp(Source, Remainder, State);
+
+    PseudoHeader =
+        <<Src_Ip:32/big-integer,
+          Dst_Ip:32/big-integer,
+          0:8,
+          ?VRRP_PROTOCOL:8,
+          (Len - 20):16/big-integer>>,
+
+    case 0 == checksum_1([PseudoHeader, Remainder]) of
+        true ->
+            verify_vrrp(Source, Remainder, State);
+        _ ->
+            {bad_checksum, State}
+    end;
 verify_packet(_Source, _Packet, State) ->
     io:format("Z~n", []),
     {bad_packet, State}.
@@ -249,13 +262,11 @@ verify_vrrp(Source,
               BinIPs/binary>>,
             State)
  when Count == (byte_size(BinIPs)/4)->
-    %% TODO - Check checksum..
-
     %% Map IPs into something useful...
     IPs = [ {A, B, C, D} || <<A:8, B:8, C:8, D:8>> <= BinIPs ],
 
     %% Map Source into an integer (used for comparism)
-    <<SourceInt:32>> = list_to_binary(tuple_to_list(Source)),
+    SourceInt = vrrp_fsm:ip_to_int(Source),
 
     {#vrrp_packet{
         from = SourceInt,
