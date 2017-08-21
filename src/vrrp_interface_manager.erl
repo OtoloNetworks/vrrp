@@ -87,7 +87,7 @@ handle_call({set_mapping, Interface, Id, FSMPid}, _From, #state{mapping = D} = S
                 start_new_interface(Interface, Id, FSMPid, State);
             {ok, {P, _MR}} ->
                 IIP = vrrp_interface:add_mapping(P, Id, FSMPid),
-                {p, IIP, State}
+                {P, IIP, State}
         end,
     {reply, {ok, InterfacePid, InterfaceIP}, NewState};
 handle_call({remove_mapping, Interface, Id}, _From, #state{mapping = D} = State) ->
