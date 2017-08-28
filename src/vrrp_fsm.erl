@@ -117,7 +117,7 @@ init(Args) ->
                 priority = Priority,
                 interval = Interval,
                 preempt_mode = Preempt,
-                master_down_interval = Interval
+                master_down_interval = master_down_time(Interval, Priority)
                },
              0}
     end.
