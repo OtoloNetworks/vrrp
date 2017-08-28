@@ -360,7 +360,7 @@ process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP}
      become_backup(State#state{                                      %% 765
                      adver_timer = undef,
                      master_adver_interval = AI,                     %% 745
-                     master_down_interval = master_down_time(AI, AP) %% 750, 755
+                     master_down_interval = master_down_time(AI, LP) %% 750, 755
                     })};
 process_message('MASTER', #vrrp_packet{}, #state{} = State) ->
     {next_state, 'MASTER', State}.                                   %% 775
