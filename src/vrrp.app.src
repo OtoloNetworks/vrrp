@@ -5,8 +5,7 @@
   {mod, { vrrp_app, []}},
   {applications,
    [kernel,
-    stdlib,
-    procket
+    stdlib
    ]},
   {env,[]},
   {modules, []},
