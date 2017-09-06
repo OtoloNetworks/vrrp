@@ -288,6 +288,8 @@ handle_packet({#vrrp_packet{id = Id} = Pkt, #state{mapping = D} = State}) ->
             discard
     end,
     State;
+handle_packet({bad_checksum, State}) ->
+    State;
 handle_packet({bad_packet, State}) ->
     State.
 

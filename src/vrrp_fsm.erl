@@ -117,7 +117,7 @@ init(Args) ->
                 priority = Priority,
                 interval = Interval,
                 preempt_mode = Preempt,
-                master_down_interval = Interval
+                master_down_interval = master_down_time(Interval, Priority)
                },
              0}
     end.
@@ -349,8 +349,7 @@ process_message('BACKUP', #vrrp_packet{}, #state{} = State) ->
    %%    (780) *endif // new Master detected
    %% (785) +endif // was priority zero?
 process_message('MASTER', #vrrp_packet{priority = 0}, #state{} = State) ->
-    send_advert(State),                                              %% 710
-    {next_state, 'MASTER', start_timer(adver_timer, State)};         %% 715
+    {next_state, 'MASTER', send_advert(State)};                      %% 710, 715
 process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP},
                 #state{priority = LP, our_ip = LIP} = State)
     when AP > LP orelse (AP == LP andalso AIP > LIP) ->              %% 725, 730
@@ -360,7 +359,7 @@ process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP}
      become_backup(State#state{                                      %% 765
                      adver_timer = undef,
                      master_adver_interval = AI,                     %% 745
-                     master_down_interval = master_down_time(AI, AP) %% 750, 755
+                     master_down_interval = master_down_time(AI, LP) %% 750, 755
                     })};
 process_message('MASTER', #vrrp_packet{}, #state{} = State) ->
     {next_state, 'MASTER', State}.                                   %% 775
