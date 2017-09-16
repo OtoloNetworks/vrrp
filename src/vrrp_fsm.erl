@@ -43,7 +43,9 @@
           master_down_interval = ?VRRP_ADVERT_INTERVAL_DEFAULT,
           %% Timers
           master_down_timer = undef,
-          adver_timer = undef
+          adver_timer = undef,
+          %% Handler module
+          module = undef
          }).
 
 %%%===================================================================
@@ -103,6 +105,7 @@ init(Args) ->
     Priority = proplists:get_value(priority, Args, ?VRRP_PRIORITY_DEFAULT),
     Interval = proplists:get_value(interval, Args, ?VRRP_ADVERT_INTERVAL_DEFAULT),
     Preempt = proplists:get_value(preempt, Args, true),
+    Module = proplists:get_value(module, Args, undef),
     case set_family(IPs) of
         {error, mixed} ->
             {stop, "Mix of protected addresses"};
@@ -117,7 +120,8 @@ init(Args) ->
                 priority = Priority,
                 interval = Interval,
                 preempt_mode = Preempt,
-                master_down_interval = master_down_time(Interval, Priority)
+                master_down_interval = master_down_time(Interval, Priority),
+                module = Module
                },
              0}
     end.
@@ -246,9 +250,15 @@ handle_info(Info, StateName, State) ->
 %% @spec terminate(Reason, StateName, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, 'MASTER', State) ->
+terminate(_Reason, 'MASTER', #state{module = undef} = State) ->
     %% Resign, then shutdown..
     send_advert(State#state{priority = 0}),
+    vrrp_interface_manager:remove(State#state.interface, State#state.id),
+    ok;
+terminate(_Reason, 'MASTER', #state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
+    %% Resign, become slave, then shutdown..
+    send_advert(State#state{priority = 0}),
+    Module:become_slave(Family, Id, VIPs),
     vrrp_interface_manager:remove(State#state.interface, State#state.id),
     ok;
 terminate(_Reason, _Statename, State) ->
@@ -370,20 +380,21 @@ register_interface(#state{interface = I, id = V} = State) ->
     erlang:link(InterfacePid),
     State#state{interface_pid = InterfacePid, our_ip = IPInt}.
 
-become_master(#state{family = ipv4} = State) ->
-    io:format("Becoming Master for ID ~p~n", [State#state.id]),
-    %% Send gratuitous arp
-    %% send_advert
+become_master(#state{module = undef, id = Id} = State) ->
+    io:format("Becoming Master for ID ~p~n", [Id]),
+    %% Just doing the FSM, no module to inform...
     send_advert(State);
-become_master(#state{family = ipv6} = State) ->
-    io:format("Becoming Master for ID ~p~n", [State#state.id]),
-    %% Send unsolicited ND
-    %% Start adver_timer
-    start_timer(adver_timer, State).
+become_master(#state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
+    io:format("Becoming Master for ID ~p~n", [Id]),
+    Module:become_master(Family, Id, VIPs),
+    send_advert(State).
 
-become_backup(#state{family = ipv4} = State) ->
+become_backup(#state{module = undef} = State) ->
+    start_timer(master_down_timer, State);
+become_backup(#state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
     %% Remove MAC from tables
-    %% Start master_down_timer
+    Module:become_backup(Family, Id, VIPs),
+    %% Start master_down_timerDate: Wed, 6 Sep 2017 04:31:30 +1200
     start_timer(master_down_timer, State).
 
 send_advert(State) ->
