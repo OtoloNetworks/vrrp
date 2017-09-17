@@ -255,10 +255,11 @@ terminate(_Reason, 'MASTER', #state{module = undef} = State) ->
     send_advert(State#state{priority = 0}),
     vrrp_interface_manager:remove(State#state.interface, State#state.id),
     ok;
-terminate(_Reason, 'MASTER', #state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
+terminate(_Reason, 'MASTER', #state{family = Family, interface = Interface,
+                                    id = Id, vip = VIPs, module = Module} = State) ->
     %% Resign, become slave, then shutdown..
     send_advert(State#state{priority = 0}),
-    Module:become_slave(Family, Id, VIPs),
+    Module:become_backup(Family, Interface, Id, VIPs),
     vrrp_interface_manager:remove(State#state.interface, State#state.id),
     ok;
 terminate(_Reason, _Statename, State) ->
@@ -284,8 +285,14 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Sanity check the incoming message...
 %%% ===================================================================
-handle_message(StateName, #vrrp_packet{from = AIP, id = I} = M, #state{our_ip = LIP, id = I} = State)
+handle_message(StateName, #vrrp_packet{from = AIP, id = I, ips = AVIPs} = M,
+               #state{our_ip = LIP, id = I, vip = LVIPs} = State)
   when AIP =/= LIP ->
+    case lists:usort(AVIPs ++ LVIPs) =:= LVIPs of
+        true -> ok;
+        _ -> io:format("VRRP: Warning: Advert contained ~p config ~p~n",
+                       [AVIPs, LVIPs])
+    end,
     process_message(StateName, M, State);
 handle_message(StateName, _M, S) ->
     %% VRRP ID does not match or the packet was from us, so we ignore
@@ -364,7 +371,6 @@ process_message('MASTER', #vrrp_packet{priority = AP, interval = AI, from = AIP}
                 #state{priority = LP, our_ip = LIP} = State)
     when AP > LP orelse (AP == LP andalso AIP > LIP) ->              %% 725, 730
     stop_timer(State#state.adver_timer),                             %% 740
-    io:format("Becoming BACKUP for ~p~n", [State#state.id]),
     {next_state, 'BACKUP',
      become_backup(State#state{                                      %% 765
                      adver_timer = undef,
@@ -380,20 +386,20 @@ register_interface(#state{interface = I, id = V} = State) ->
     erlang:link(InterfacePid),
     State#state{interface_pid = InterfacePid, our_ip = IPInt}.
 
-become_master(#state{module = undef, id = Id} = State) ->
-    io:format("Becoming Master for ID ~p~n", [Id]),
+become_master(#state{module = undef} = State) ->
     %% Just doing the FSM, no module to inform...
     send_advert(State);
-become_master(#state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
-    io:format("Becoming Master for ID ~p~n", [Id]),
-    Module:become_master(Family, Id, VIPs),
+become_master(#state{family = Family, interface = Interface,
+                     id = Id, vip = VIPs, module = Module} = State) ->
+    Module:become_master(Family, Interface, Id, VIPs),
     send_advert(State).
 
 become_backup(#state{module = undef} = State) ->
     start_timer(master_down_timer, State);
-become_backup(#state{family = Family, id = Id, vip = VIPs, module = Module} = State) ->
+become_backup(#state{family = Family, interface = Interface,
+                     id = Id, vip = VIPs, module = Module} = State) ->
     %% Remove MAC from tables
-    Module:become_backup(Family, Id, VIPs),
+    Module:become_backup(Family, Interface, Id, VIPs),
     %% Start master_down_timerDate: Wed, 6 Sep 2017 04:31:30 +1200
     start_timer(master_down_timer, State).
 
