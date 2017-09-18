@@ -174,8 +174,8 @@ startup_adapt(S, [Args = #{ id := Id }]) ->
   end.
 
 startup(#{ id := Id, priority := Prio, ips := Ips, interface := Iface }) ->
-  {ok, Pid} = vrrp_instance_sup:start_link([{id, Id}, {priority, Prio},
-                                            {ip, Ips}, {interface, Iface}]),
+  {ok, Pid, _Name} = vrrp_sup:start_vrrp([{id, Id}, {priority, Prio},
+                                          {ip, Ips}, {interface, Iface}]),
   Pid.
 
 startup_callouts(_S, [#{ id := Id }]) ->
@@ -284,12 +284,8 @@ shutdown_adapt(S, [Args = #{ id := Id }]) ->
     _                           -> false
   end.
 
-shutdown(#{ pid := Pid }) ->
-  vrrp_instance_sup:stop(Pid).
-
-%% NOTE: This doesn't work. See [Note:ShutDown].
-%% shutdown(#{ id := Id }) ->
-%%   vrrp_fsm:stop(Id).
+shutdown(#{ id := Id }) ->
+  vrrp_sup:stop_vrrp(erlang:list_to_atom("vrrp_" ++ erlang:integer_to_list(Id))).
 
 shutdown_callouts(S, [#{ id := Id }]) ->
   R = get_router(S, Id),
