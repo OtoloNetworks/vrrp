@@ -15,7 +15,9 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
-    vrrp_sup:start_link().
+    R = vrrp_sup:start_link(),
+    start_all(application:get_env(vrrp, instance)),
+    R.
 
 %%--------------------------------------------------------------------
 stop(_State) ->
@@ -24,3 +26,11 @@ stop(_State) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
+start_all(undefined) ->
+    ok;
+start_all({ok, Keys}) ->
+    lists:foreach(
+      fun({Id, Params}) ->
+              vrrp_sup:start_vrrp([{id, Id}] ++ Params)
+      end, Keys).
+
